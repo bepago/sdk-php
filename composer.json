@@ -1,0 +1,21 @@
+{
+    "name": "bepago/sdk",
+    "description": "SDK oficial de bePago para PHP (7.4+, sin dependencias)",
+    "type": "library",
+    "license": "MIT",
+    "homepage": "https://bepago.com/docs",
+    "keywords": ["bepago", "pagos", "payments", "paraguay", "cobros", "payouts", "webhooks"],
+    "authors": [
+        { "name": "bePago" }
+    ],
+    "require": {
+        "php": ">=7.4",
+        "ext-curl": "*",
+        "ext-json": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Bepago\\": "src/"
+        }
+    }
+}
