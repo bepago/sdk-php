@@ -100,8 +100,45 @@ class BePago {
         };
     }
 
-    public static function verifyWebhook(string $webhookSecret, string $timestamp, string $body, string $signature): bool {
+    /**
+     * Verifica un webhook de bePago y devuelve el evento parseado.
+     *
+     * Chequea la firma HMAC y la FRESCURA del timestamp: por defecto rechaza
+     * entregas fuera de ±5 minutos ($toleranceSeconds configurable). Lanza una
+     * RuntimeException si la firma no valida o el timestamp está fuera de ventana.
+     *
+     * Expone `id` (header X-BePago-Event-Id, estable entre reintentos): guardá
+     * los ids ya procesados para descartar duplicados de forma idempotente.
+     *
+     *   $evt = BePago::verifyWebhook($secret, [
+     *     'id'        => $_SERVER['HTTP_X_BEPAGO_EVENT_ID'] ?? null,
+     *     'timestamp' => $_SERVER['HTTP_X_WEBHOOK_TIMESTAMP'] ?? '',
+     *     'signature' => $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'] ?? '',
+     *     'body'      => file_get_contents('php://input'), // cuerpo EXACTO
+     *   ]);
+     *   if ($seen->has($evt['id'])) return; // duplicado
+     *
+     * @param array{id?:?string,timestamp:string,body:string,signature:string} $event
+     * @return array{id:?string,event:?string,livemode:?bool,data:?array}
+     */
+    public static function verifyWebhook(string $webhookSecret, array $event, int $toleranceSeconds = 300): array {
+        $timestamp = (string)($event['timestamp'] ?? '');
+        $body = (string)($event['body'] ?? '');
+        $signature = (string)($event['signature'] ?? '');
         $expected = hash_hmac('sha256', $timestamp . $body, $webhookSecret);
-        return hash_equals($expected, $signature);
+        if (!hash_equals($expected, $signature)) {
+            throw new \RuntimeException('bePago webhook: firma inválida');
+        }
+        $ageMs = abs((int)(microtime(true) * 1000) - (int)$timestamp);
+        if ($ageMs > $toleranceSeconds * 1000) {
+            throw new \RuntimeException('bePago webhook: timestamp fuera de la ventana permitida');
+        }
+        $payload = json_decode($body, true) ?? [];
+        return [
+            'id' => $event['id'] ?? ($payload['id'] ?? null),
+            'event' => $payload['event'] ?? null,
+            'livemode' => $payload['livemode'] ?? null,
+            'data' => $payload['data'] ?? null,
+        ];
     }
 }

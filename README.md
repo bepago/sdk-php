@@ -65,25 +65,39 @@ $bp->payouts()->balance();
 ### Verificar un webhook
 
 bePago firma cada webhook con `HMAC-SHA256` sobre `timestamp + body` usando el
-secreto del webhook. Verificá la firma antes de procesar el evento:
+secreto del webhook. `verifyWebhook` chequea la firma **y la frescura del
+timestamp** (rechaza entregas fuera de ±5 minutos por defecto, configurable) y
+devuelve el evento ya parseado, con su `id`:
 
 ```php
 use Bepago\BePago;
 
-$timestamp = $_SERVER['HTTP_X_TIMESTAMP'] ?? '';
-$signature = $_SERVER['HTTP_X_SIGNATURE'] ?? '';
-$rawBody   = file_get_contents('php://input'); // el cuerpo tal cual llegó
+$rawBody = file_get_contents('php://input'); // el cuerpo tal cual llegó
 
-$ok = BePago::verifyWebhook('whsec_tu_secreto_de_webhook', $timestamp, $rawBody, $signature);
-
-if (!$ok) {
+try {
+    $evt = BePago::verifyWebhook('whsec_tu_secreto_de_webhook', [
+        'id'        => $_SERVER['HTTP_X_BEPAGO_EVENT_ID'] ?? null,
+        'timestamp' => $_SERVER['HTTP_X_WEBHOOK_TIMESTAMP'] ?? '',
+        'signature' => $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'] ?? '',
+        'body'      => $rawBody,
+    ]);
+} catch (\RuntimeException $e) {
     http_response_code(400);
-    exit('firma inválida');
+    exit('webhook inválido'); // firma o timestamp fuera de ventana
 }
 
-$evento = json_decode($rawBody, true);
-// procesar $evento['type'] …
+// Anti-replay: cada evento trae un id ESTABLE entre reintentos. Guardá los ids
+// ya procesados y descartá los duplicados (los reintentos reenvían el mismo id
+// con un timestamp nuevo).
+if (ya_procesado($evt['id'])) { http_response_code(200); exit; }
+marcar_procesado($evt['id']);
+
+// procesar $evt['event'] / $evt['data'] …
+http_response_code(200);
 ```
+
+Tolerancia configurable (ej. ±10 minutos): pasá el 3er argumento
+`BePago::verifyWebhook($secret, [...], 600)`.
 
 ## Documentación
 
