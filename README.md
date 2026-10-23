@@ -11,10 +11,13 @@ Cobros, pagos masivos (payouts) y verificación de webhooks con firma HMAC v2.
 composer require bepago/sdk
 ```
 
+¿Sin Composer? Bajá el archivo único [`BePago.php`](https://bepago.com/sdk/BePago.php)
+y usá `require_once 'BePago.php';` — es exactamente el mismo código que el paquete.
+
 ## Uso
 
 ```php
-require 'vendor/autoload.php';
+require 'vendor/autoload.php'; // o: require_once 'BePago.php';
 
 use Bepago\BePago;
 

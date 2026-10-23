@@ -2,9 +2,20 @@
 /**
  * bePago SDK — PHP (7.4+, sin dependencias).
  *
- * Uso (Composer / PSR-4):
+ * Fuente única: este mismo archivo se publica como el paquete Composer
+ * `bepago/sdk` (PSR-4, namespace Bepago\BePago) y se sirve como descarga
+ * directa en https://bepago.com/sdk/BePago.php.
+ *
+ * Con Composer:
+ *   composer require bepago/sdk
  *   use Bepago\BePago;
  *   $bp = new BePago('sk_test_…');
+ *
+ * Sin Composer (descarga directa):
+ *   require_once 'BePago.php';
+ *   use Bepago\BePago;
+ *   $bp = new BePago('sk_test_…');
+ *
  *   $charge = $bp->charges()->create([
  *     'reference' => 'order-1', 'currency' => 'PYG',
  *     'amount' => 150000, 'description' => 'Test'
@@ -57,7 +68,6 @@ class BePago {
         ]);
         $response = curl_exec($ch);
         $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
 
         $data = json_decode($response, true) ?? [];
         if ($status >= 400) {
