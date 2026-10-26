@@ -62,6 +62,16 @@ $bp->payouts()->cancel($payout['id']);
 $bp->payouts()->balance();
 ```
 
+Lote de pagos (hasta 1000 por llamada; queda pendiente de aprobación en el
+panel, cuatro ojos, salvo auto-aprobación por API habilitada):
+
+```php
+$lote = $bp->payouts()->batches()->create([
+    'payouts' => [['amount' => 150000, 'destination' => ['type' => 'alias', 'alias' => 'juan.perez'], 'external_id' => 'premio-88']],
+], 'idem-key-unica');
+$bp->payouts()->batches()->get($lote['id']);
+```
+
 ### Verificar un webhook
 
 bePago firma cada webhook con `HMAC-SHA256` sobre `timestamp + body` usando el

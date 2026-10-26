@@ -107,6 +107,16 @@ class BePago {
             public function get(string $id): array { return $this->sdk->request('GET', '/v1/payouts/' . urlencode($id)); }
             public function cancel(string $id): array { return $this->sdk->request('POST', '/v1/payouts/' . urlencode($id) . '/cancel'); }
             public function balance(): array { return $this->sdk->request('GET', '/v1/balance'); }
+            /** Lotes de pagos masivos (hasta 1000 por llamada; quedan pendientes de aprobación en el panel). */
+            public function batches(): object {
+                $sdk = $this->sdk;
+                return new class($sdk) {
+                    private $sdk;
+                    public function __construct($sdk) { $this->sdk = $sdk; }
+                    public function create(array $params, string $idempotencyKey): array { return $this->sdk->request('POST', '/v1/payouts/batches', $params, $idempotencyKey); }
+                    public function get(string $id): array { return $this->sdk->request('GET', '/v1/payouts/batches/' . urlencode($id)); }
+                };
+            }
         };
     }
 
