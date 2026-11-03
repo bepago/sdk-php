@@ -10,7 +10,7 @@ cada ejemplo de acá funciona copiado tal cual.
 ## Instalación
 
 ```bash
-composer require bepago/sdk:^1.5
+composer require bepago/sdk:^1.6
 ```
 
 ¿Sin Composer? Bajá el archivo único [`BePago.php`](https://bepago.com/sdk/BePago.php)
@@ -32,8 +32,25 @@ formato anterior no la traen: el SDK te la pide con un error claro y la pasás
 aparte, copiándola completa de la tabla de claves:
 `new BePago($secret, ['keyId' => 'pk_…'])`.
 
-Opciones: `'baseUrl' => 'https://bepago.com/api'` (con o sin `/v1` al final) y
-`'timeout' => 30` (segundos).
+Opciones: `'baseUrl' => 'https://bepago.com/api'` (con o sin `/v1` al final),
+`'timeout' => 30` (segundos, por intento) y `'maxRetries' => 2` (ver Reintentos).
+
+### Reintentos
+
+El SDK reintenta solo lo que se puede repetir sin duplicar nada, hasta
+`'maxRetries'` veces (2 por defecto; `0` los apaga), con esperas cortas que se
+duplican (250 ms, 500 ms…):
+
+- **Consultas (GET):** ante red caída, tiempo agotado o un `502`/`503`/`504`.
+- **Pagos y lotes (POST con clave de idempotencia):** solo ante red caída o
+  tiempo agotado, siempre con la **misma** clave: si el primer intento llegó,
+  la API devuelve el mismo pago, no crea otro.
+- **Nunca** un POST sin clave de idempotencia (crear un cobro, reembolsar,
+  cancelar) ni una respuesta de la API (4xx, o un 5xx de un POST): esos te
+  llegan como excepción para que decidas vos.
+
+Cada intento va firmado de nuevo (timestamp y nonce propios). Si se agotan, la
+excepción es la del último intento.
 
 ### Errores
 

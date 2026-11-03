@@ -53,6 +53,7 @@ class BePago {
     private string $keyId;
     private string $base;
     private int $timeout;
+    private int $maxRetries;
 
     public function __construct(string $secret, array $opts = []) {
         if ($secret === '') throw new \InvalidArgumentException('bePago: falta la clave secreta (sk_test_… o sk_live_…). La creás en Integraciones › Claves de API.');
@@ -62,6 +63,11 @@ class BePago {
         // https://bepago.com/api — acepta también la dirección con /v1 al final (como la muestra el panel)
         $this->base = preg_replace('#/v1$#', '', rtrim($opts['baseUrl'] ?? 'https://bepago.com/api', '/'));
         $this->timeout = (int)($opts['timeout'] ?? 30);
+        // Reintentos automáticos SOLO cuando repetir no puede duplicar nada: GET
+        // ante red caída, tiempo agotado o 502/503/504; POST con clave de
+        // idempotencia (pagos y lotes) ante red caída o tiempo agotado. Un POST
+        // sin clave (cobros, reembolsos) nunca.
+        $this->maxRetries = max(0, (int)($opts['maxRetries'] ?? 2));
     }
 
     /**
@@ -100,6 +106,30 @@ class BePago {
             throw new BePagoException("bePago: esta clave secreta es de un formato anterior y no trae su Key ID adentro. Pasalo aparte: new BePago(\$secret, ['keyId' => 'pk_…']). Está completo, con botón Copiar, en Integraciones › Claves de API (columna Clave pública).", 0, 'missing_key_id');
         }
         $bodyJson = $body !== null ? json_encode($body, JSON_UNESCAPED_UNICODE) : null;
+        for ($attempt = 0; ; $attempt++) {
+            try {
+                return $this->requestOnce($method, $path, $bodyJson, $idempotencyKey);
+            } catch (BePagoException $e) {
+                if ($attempt >= $this->maxRetries || !self::retryable($e, $method, $idempotencyKey)) throw $e;
+                // 250 ms, 500 ms, 1 s… (tope 2 s) más un poco de azar
+                usleep((min(250 * (2 ** $attempt), 2000) + random_int(0, 99)) * 1000);
+            }
+        }
+    }
+
+    /**
+     * ¿Se puede repetir sin riesgo? GET: red caída, tiempo agotado o 502/503/504.
+     * POST: solo con clave de idempotencia y sin respuesta (red o tiempo): con
+     * respuesta, la API ya decidió. Nunca un POST sin clave.
+     */
+    private static function retryable(BePagoException $e, string $method, ?string $idempotencyKey): bool {
+        $noResponse = in_array($e->getErrorCode(), ['network_error', 'timeout'], true);
+        if ($method === 'GET') return $noResponse || in_array($e->getStatus(), [502, 503, 504], true);
+        return $method === 'POST' && $idempotencyKey !== null && $idempotencyKey !== '' && $noResponse;
+    }
+
+    private function requestOnce(string $method, string $path, ?string $bodyJson, ?string $idempotencyKey): array {
+        // Cada intento con su propio timestamp y nonce: un nonce no se usa dos veces
         $sig = $this->sign($method, $path, $bodyJson, $idempotencyKey);
 
         $headers = [
