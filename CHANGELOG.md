@@ -1,5 +1,9 @@
 # Cambios — bePago SDK para PHP
 
+## 1.6.2 — 2026-11-03
+
+- `sandbox()->fund(?int $amount)`: carga saldo de prueba para pagos masivos (`POST /v1/test/balance/fund`, solo `sk_test_`).
+
 ## 1.6.1 — 2026-11-03
 
 - El evento de `verifyWebhook` / `onEvent` trae `merchant_id` (tu ID de comercio), como el cuerpo real del aviso.

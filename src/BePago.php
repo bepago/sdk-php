@@ -233,6 +233,8 @@ class BePago {
             private $sdk;
             public function __construct($sdk) { $this->sdk = $sdk; }
             public function pay(string $ref): array { return $this->sdk->request('POST', '/v1/test/charges/' . urlencode($ref) . '/pay'); }
+            /** Carga saldo de prueba para pagos masivos (sin monto: la carga estándar). */
+            public function fund(?int $amount = null): array { return $this->sdk->request('POST', '/v1/test/balance/fund', $amount === null ? null : ['amount' => $amount]); }
         };
     }
 
