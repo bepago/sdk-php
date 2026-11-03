@@ -233,8 +233,15 @@ class BePago {
             private $sdk;
             public function __construct($sdk) { $this->sdk = $sdk; }
             public function pay(string $ref): array { return $this->sdk->request('POST', '/v1/test/charges/' . urlencode($ref) . '/pay'); }
-            /** Carga saldo de prueba para pagos masivos (sin monto: la carga estándar). */
-            public function fund(?int $amount = null): array { return $this->sdk->request('POST', '/v1/test/balance/fund', $amount === null ? null : ['amount' => $amount]); }
+            /**
+             * Carga saldo de prueba para pagos masivos (sin monto: la carga estándar).
+             * Acepta el monto solo (`fund(5000000)`) o el mismo cuerpo de la API (`fund(['amount' => 5000000])`).
+             * @param int|array{amount?: int}|null $amount
+             */
+            public function fund($amount = null): array {
+                $value = is_array($amount) ? ($amount['amount'] ?? null) : $amount;
+                return $this->sdk->request('POST', '/v1/test/balance/fund', $value === null ? null : ['amount' => $value]);
+            }
         };
     }
 

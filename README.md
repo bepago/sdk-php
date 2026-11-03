@@ -103,6 +103,7 @@ $bp->charges()->cancel('pedido-1843');                       // uno todavía sin
 $bp->charges()->refund('pedido-1842', 'cliente canceló');
 $bp->charges()->balance();
 $bp->sandbox()->pay('pedido-1844');                          // solo sk_test_: simula el pago
+$bp->sandbox()->fund(['amount' => 5000000]);                 // solo sk_test_: saldo de prueba (o fund(5000000), o fund())
 ```
 
 La misma referencia devuelve siempre el mismo cobro, también vencido: si el

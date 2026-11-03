@@ -1,5 +1,9 @@
 # Cambios — bePago SDK para PHP
 
+## 1.6.3 — 2026-11-03
+
+- `sandbox()->fund()` acepta también el cuerpo de la API: `fund(['amount' => 5000000])` (además de `fund(5000000)` y `fund()`).
+
 ## 1.6.2 — 2026-11-03
 
 - `sandbox()->fund(?int $amount)`: carga saldo de prueba para pagos masivos (`POST /v1/test/balance/fund`, solo `sk_test_`).
