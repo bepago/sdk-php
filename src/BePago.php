@@ -19,6 +19,7 @@
  *   $charge = $bp->charges()->create([
  *     'reference' => 'order-1', 'currency' => 'PYG',
  *     'amount' => 150000, 'description' => 'Test'
+ *     // opcional: 'method' => 'qr_sip' | 'pix' | 'qr_ar' (uno de los activos del comercio)
  *   ]);
  */
 namespace Bepago;
@@ -42,6 +43,17 @@ class BePago {
         $canonical = implode("\n", ['v2', $timestamp, $nonce, strtoupper($method), $path, $idempotencyKey ?? '', $bodyHash]);
         $signature = hash_hmac('sha256', $canonical, $this->secret);
         return compact('timestamp', 'nonce', 'signature', 'bodyStr');
+    }
+
+    /**
+     * Pagos y lotes llevan X-Idempotency-Key OBLIGATORIO (mín. 8 caracteres), igual
+     * que la API (400 missing_idempotency_key): se valida antes de firmar.
+     */
+    public static function requireIdempotencyKey(string $key): string {
+        if (strlen(trim($key)) < 8) {
+            throw new \InvalidArgumentException('bePago: falta idempotencyKey (string de al menos 8 caracteres, único por pago o lote)');
+        }
+        return $key;
     }
 
     public function request(string $method, string $path, ?array $body = null, ?string $idempotencyKey = null): array {
@@ -103,7 +115,7 @@ class BePago {
         return new class($self) {
             private $sdk;
             public function __construct($sdk) { $this->sdk = $sdk; }
-            public function create(array $params, string $idempotencyKey): array { return $this->sdk->request('POST', '/v1/payouts', $params, $idempotencyKey); }
+            public function create(array $params, string $idempotencyKey): array { return $this->sdk->request('POST', '/v1/payouts', $params, BePago::requireIdempotencyKey($idempotencyKey)); }
             public function get(string $id): array { return $this->sdk->request('GET', '/v1/payouts/' . urlencode($id)); }
             public function cancel(string $id): array { return $this->sdk->request('POST', '/v1/payouts/' . urlencode($id) . '/cancel'); }
             public function balance(): array { return $this->sdk->request('GET', '/v1/balance'); }
@@ -113,7 +125,7 @@ class BePago {
                 return new class($sdk) {
                     private $sdk;
                     public function __construct($sdk) { $this->sdk = $sdk; }
-                    public function create(array $params, string $idempotencyKey): array { return $this->sdk->request('POST', '/v1/payouts/batches', $params, $idempotencyKey); }
+                    public function create(array $params, string $idempotencyKey): array { return $this->sdk->request('POST', '/v1/payouts/batches', $params, BePago::requireIdempotencyKey($idempotencyKey)); }
                     public function get(string $id): array { return $this->sdk->request('GET', '/v1/payouts/batches/' . urlencode($id)); }
                 };
             }
