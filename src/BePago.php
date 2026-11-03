@@ -1,6 +1,6 @@
 <?php
 /**
- * bePago SDK — PHP (7.4+, sin dependencias).
+ * bePago SDK — PHP (7.4+; solo las extensiones curl y json, que vienen con PHP).
  *
  * Fuente única: este mismo archivo se publica como el paquete Composer
  * `bepago/sdk` (PSR-4, namespace Bepago\BePago) y se sirve como descarga
@@ -9,7 +9,7 @@
  * Con Composer:
  *   composer require bepago/sdk
  *   use Bepago\BePago;
- *   $bp = new BePago('sk_test_…');
+ *   $bp = new BePago('sk_test_…');   // el Key ID (pk_…) sale del secreto; con claves viejas: ['keyId' => 'pk_…']
  *
  * Sin Composer (descarga directa):
  *   require_once 'BePago.php';
@@ -24,15 +24,54 @@
  */
 namespace Bepago;
 
+/**
+ * Error de la API o de la conexión. getCode() es el HTTP (0 sin respuesta);
+ * getErrorCode() el código de bePago (`insufficient_funds`, `network_error`…).
+ */
+class BePagoException extends \RuntimeException {
+    private ?string $errorCode;
+    private ?string $requestId;
+    private $details;
+    private $response;
+
+    public function __construct(string $message, int $status = 0, ?string $errorCode = null, ?string $requestId = null, $details = null, $response = null) {
+        parent::__construct($message, $status);
+        $this->errorCode = $errorCode;
+        $this->requestId = $requestId;
+        $this->details = $details;
+        $this->response = $response;
+    }
+    public function getStatus(): int { return $this->getCode(); }
+    public function getErrorCode(): ?string { return $this->errorCode; }
+    public function getRequestId(): ?string { return $this->requestId; }
+    public function getDetails() { return $this->details; }
+    public function getResponse() { return $this->response; }
+}
+
 class BePago {
     private string $secret;
     private string $keyId;
     private string $base;
+    private int $timeout;
 
     public function __construct(string $secret, array $opts = []) {
+        if ($secret === '') throw new \InvalidArgumentException('bePago: falta la clave secreta (sk_test_… o sk_live_…). La creás en Integraciones › Claves de API.');
         $this->secret = $secret;
-        $this->keyId = $opts['keyId'] ?? str_replace('sk_', 'pk_', $secret);
-        $this->base = $opts['baseUrl'] ?? 'https://bepago.com/api';
+        // Sin Key ID (secreto del formato anterior) igual se puede verificar webhooks; la API lo pide al primer request
+        $this->keyId = $opts['keyId'] ?? (self::keyIdFromSecret($secret) ?? '');
+        // https://bepago.com/api — acepta también la dirección con /v1 al final (como la muestra el panel)
+        $this->base = preg_replace('#/v1$#', '', rtrim($opts['baseUrl'] ?? 'https://bepago.com/api', '/'));
+        $this->timeout = (int)($opts['timeout'] ?? 30);
+    }
+
+    /**
+     * Key ID público (pk_…) de un secreto. Los secretos de ahora llevan adentro
+     * el cuerpo de su Key ID (sk_<modo>_<16 del Key ID><43>); con los anteriores
+     * devuelve null (hay que pasar el Key ID aparte).
+     */
+    public static function keyIdFromSecret(string $secret): ?string {
+        if (!preg_match('/^sk_(test|live)_([A-Za-z0-9_-]+)$/', $secret, $m) || strlen($m[2]) !== 59) return null;
+        return 'pk_' . $m[1] . '_' . substr($m[2], 0, 16);
     }
 
     private function sign(string $method, string $path, ?string $body, ?string $idempotencyKey): array {
@@ -57,6 +96,9 @@ class BePago {
     }
 
     public function request(string $method, string $path, ?array $body = null, ?string $idempotencyKey = null): array {
+        if ($this->keyId === '') {
+            throw new BePagoException("bePago: esta clave secreta es de un formato anterior y no trae su Key ID adentro. Pasalo aparte: new BePago(\$secret, ['keyId' => 'pk_…']). Está completo, con botón Copiar, en Integraciones › Claves de API (columna Clave pública).", 0, 'missing_key_id');
+        }
         $bodyJson = $body !== null ? json_encode($body, JSON_UNESCAPED_UNICODE) : null;
         $sig = $this->sign($method, $path, $bodyJson, $idempotencyKey);
 
@@ -76,16 +118,31 @@ class BePago {
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_POSTFIELDS => $bodyJson,
-            CURLOPT_TIMEOUT => 30,
+            CURLOPT_TIMEOUT => $this->timeout,
         ]);
         $response = curl_exec($ch);
-        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
-        $data = json_decode($response, true) ?? [];
-        if ($status >= 400) {
-            throw new \RuntimeException($data['error']['message'] ?? "HTTP $status", $status);
+        $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        if ($response === false) {
+            // Sin respuesta no se sabe si la API lo procesó: en pagos, reintentá con la MISMA idempotencyKey.
+            $errno = curl_errno($ch);
+            $timedOut = $errno === CURLE_OPERATION_TIMEDOUT;
+            throw new BePagoException($timedOut ? "bePago: sin respuesta en {$this->timeout} s" : 'bePago: no se pudo conectar con ' . $this->base . ' (' . curl_error($ch) . ')', 0, $timedOut ? 'timeout' : 'network_error');
         }
+
+        $data = $response === '' ? null : json_decode($response, true);
+        if ($status >= 400) {
+            $e = is_array($data) ? ($data['error'] ?? []) : [];
+            throw new BePagoException($e['message'] ?? ("bePago: HTTP $status" . (is_array($data) ? '' : ' (respuesta sin JSON)')), $status,
+                $e['code'] ?? (is_array($data) ? null : 'invalid_response'), $e['request_id'] ?? null, $e['details'] ?? null, $data ?? $response);
+        }
+        if (!is_array($data)) throw new BePagoException('bePago: respuesta sin JSON', $status, 'invalid_response', null, null, $response);
         return $data;
+    }
+
+    /** "?limit=20&status=paid" a partir de un arreglo de filtros (sin los vacíos). */
+    public static function query(array $params): string {
+        $q = http_build_query(array_filter($params, fn($v) => $v !== null && $v !== ''), '', '&', PHP_QUERY_RFC3986);
+        return $q === '' ? '' : '?' . $q;
     }
 
     public function charges(): object {
@@ -95,17 +152,22 @@ class BePago {
             public function __construct($sdk) { $this->sdk = $sdk; }
             public function create(array $params): array { return $this->sdk->request('POST', '/v1/charges', $params); }
             public function get(string $ref): array { return $this->sdk->request('GET', '/v1/charges/' . urlencode($ref)); }
+            /** Cobros del más nuevo al más viejo: data, has_more, next_cursor. Filtros: limit, status, from, to, cursor. */
+            public function list(array $params = []): array { return $this->sdk->request('GET', '/v1/charges' . BePago::query($params)); }
+            /** Cancela un cobro todavía sin pagar (created/pending). */
+            public function cancel(string $ref): array { return $this->sdk->request('POST', '/v1/charges/' . urlencode($ref) . '/cancel'); }
             public function refund(string $ref, string $reason): array { return $this->sdk->request('POST', '/v1/charges/' . urlencode($ref) . '/refund', ['reason' => $reason]); }
             public function balance(): array { return $this->sdk->request('GET', '/v1/charges/balance'); }
             /**
              * Confirma el estado REAL de un cobro consultando la API (fuente de
-             * verdad). Nunca confíes en el navegador ni en el iframe.
+             * verdad). Nunca confíes en el navegador ni en el iframe. `paid` es
+             * true si el cobro figura `paid` o `settled` (pagado y ya liquidado).
              * @return array{paid:bool,status:?string,charge:array}
              */
             public function confirm(string $ref): array {
                 $charge = $this->sdk->request('GET', '/v1/charges/' . urlencode($ref));
                 $status = $charge['status'] ?? ($charge['data']['status'] ?? null);
-                return ['paid' => $status === 'paid', 'status' => $status, 'charge' => $charge];
+                return ['paid' => $status === 'paid' || $status === 'settled', 'status' => $status, 'charge' => $charge];
             }
         };
     }
@@ -117,6 +179,8 @@ class BePago {
             public function __construct($sdk) { $this->sdk = $sdk; }
             public function create(array $params, string $idempotencyKey): array { return $this->sdk->request('POST', '/v1/payouts', $params, BePago::requireIdempotencyKey($idempotencyKey)); }
             public function get(string $id): array { return $this->sdk->request('GET', '/v1/payouts/' . urlencode($id)); }
+            /** Pagos del más nuevo al más viejo: data, has_more, next_cursor. Filtros: limit, status, from, to, cursor. */
+            public function list(array $params = []): array { return $this->sdk->request('GET', '/v1/payouts' . BePago::query($params)); }
             public function cancel(string $id): array { return $this->sdk->request('POST', '/v1/payouts/' . urlencode($id) . '/cancel'); }
             public function balance(): array { return $this->sdk->request('GET', '/v1/balance'); }
             /** Lotes de pagos masivos (hasta 1000 por llamada; quedan pendientes de aprobación en el panel). */
@@ -132,10 +196,26 @@ class BePago {
         };
     }
 
+    /** Solo con claves sk_test_: simula que el pagador pagó (el cobro pasa a paid y sale el webhook charge.paid). */
+    public function sandbox(): object {
+        $self = $this;
+        return new class($self) {
+            private $sdk;
+            public function __construct($sdk) { $this->sdk = $sdk; }
+            public function pay(string $ref): array { return $this->sdk->request('POST', '/v1/test/charges/' . urlencode($ref) . '/pay'); }
+        };
+    }
+
     /**
      * Manejador de webhooks seguro-por-defecto. Verifica firma y frescura
      * (±5 min), descarta duplicados por X-BePago-Event-Id y SOLO invoca
-     * `onPaid` con eventos `charge.paid` válidos y no vistos.
+     * `onPaid` con eventos `charge.paid` válidos y no vistos; `onEvent` recibe
+     * TODOS los eventos (payout.completed, payout.failed, charge.refunded…).
+     *
+     * Si `onPaid`/`onEvent` lanzan, responde 500 y el evento NO queda como
+     * visto: el reintento de bePago lo vuelve a procesar (que tu entrega sea
+     * idempotente por orden). El aviso de prueba del panel («Probar mi
+     * webhook», `test` true) responde 200 sin llamar a tus funciones.
      *
      * Config: [
      *   'secret'  => string,                        // requerido
@@ -207,19 +287,23 @@ class BePago {
                         } catch (\Throwable $e) {
                             return ['status' => 400, 'body' => json_encode(['error' => 'invalid_signature']), 'duplicate' => false, 'ok' => false];
                         }
+                        if (!empty($evt['test'])) {
+                            return ['status' => 200, 'body' => json_encode(['received' => true, 'test' => true]), 'duplicate' => false, 'ok' => true, 'test' => true];
+                        }
                         $id = (string)($evt['id'] ?? '');
                         if ($this->store->has($id)) {
                             return ['status' => 200, 'body' => json_encode(['received' => true, 'duplicate' => true]), 'duplicate' => true, 'ok' => true];
                         }
-                        $this->store->add($id);
                         try {
                             if (isset($this->config['onEvent']) && is_callable($this->config['onEvent'])) ($this->config['onEvent'])($evt);
                             if (($evt['event'] ?? null) === 'charge.paid' && isset($this->config['onPaid']) && is_callable($this->config['onPaid'])) {
                                 ($this->config['onPaid'])(['reference' => $evt['data']['reference'] ?? null, 'data' => $evt['data'] ?? null, 'event' => $evt]);
                             }
                         } catch (\Throwable $e) {
+                            // Sin marcar como visto: el reintento lo vuelve a procesar.
                             return ['status' => 500, 'body' => json_encode(['error' => 'handler_error']), 'duplicate' => false, 'ok' => false];
                         }
+                        $this->store->add($id);
                         return ['status' => 200, 'body' => json_encode(['received' => true]), 'duplicate' => false, 'ok' => true];
                     }
                 };
@@ -246,7 +330,10 @@ class BePago {
      *   if ($seen->has($evt['id'])) return; // duplicado
      *
      * @param array{id?:?string,timestamp:string,body:string,signature:string} $event
-     * @return array{id:?string,event:?string,livemode:?bool,data:?array}
+     * `test` es true en el aviso de prueba de «Probar mi webhook» del panel
+     * (charge.paid de un cobro que no existe): no entregues nada con él.
+     *
+     * @return array{id:?string,event:?string,livemode:?bool,test:bool,data:?array}
      */
     public static function verifyWebhook(string $webhookSecret, array $event, int $toleranceSeconds = 300): array {
         $timestamp = (string)($event['timestamp'] ?? '');
@@ -254,17 +341,18 @@ class BePago {
         $signature = (string)($event['signature'] ?? '');
         $expected = hash_hmac('sha256', $timestamp . $body, $webhookSecret);
         if (!hash_equals($expected, $signature)) {
-            throw new \RuntimeException('bePago webhook: firma inválida');
+            throw new BePagoException('bePago webhook: firma inválida', 0, 'invalid_signature');
         }
         $ageMs = abs((int)(microtime(true) * 1000) - (int)$timestamp);
         if ($ageMs > $toleranceSeconds * 1000) {
-            throw new \RuntimeException('bePago webhook: timestamp fuera de la ventana permitida');
+            throw new BePagoException('bePago webhook: timestamp fuera de la ventana permitida', 0, 'invalid_timestamp');
         }
         $payload = json_decode($body, true) ?? [];
         return [
             'id' => $event['id'] ?? ($payload['id'] ?? null),
             'event' => $payload['event'] ?? null,
             'livemode' => $payload['livemode'] ?? null,
+            'test' => ($payload['test'] ?? false) === true,
             'data' => $payload['data'] ?? null,
         ];
     }

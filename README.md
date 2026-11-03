@@ -1,7 +1,7 @@
 # bePago — SDK para PHP
 
-SDK oficial de [bePago](https://bepago.com) para PHP 7.4+. Sin dependencias
-(solo las extensiones `curl` y `json`, presentes en cualquier PHP estándar).
+SDK oficial de [bePago](https://bepago.com) para PHP 7.4+. Usa solo las
+extensiones `curl` y `json`, presentes en cualquier PHP estándar.
 
 Cobros con checkout embebido, pagos masivos (payouts) y webhooks firmados
 (HMAC v2). Es el mismo SDK de la [guía de integración](https://bepago.com/docs):
@@ -10,7 +10,7 @@ cada ejemplo de acá funciona copiado tal cual.
 ## Instalación
 
 ```bash
-composer require bepago/sdk
+composer require bepago/sdk:^1.5
 ```
 
 ¿Sin Composer? Bajá el archivo único [`BePago.php`](https://bepago.com/sdk/BePago.php)
@@ -26,9 +26,30 @@ use Bepago\BePago;
 $bp = new BePago(getenv('BEPAGO_SECRET')); // sk_test_… o sk_live_…: la clave decide el modo
 ```
 
-La clave (`sk_…`) la creás en tu panel (Integraciones › Claves de API). El key
-ID público (`pk_…`) se deriva solo; si necesitás pasarlo aparte:
+La clave (`sk_…`) está en tu panel (Integraciones › Claves de API): el secreto
+lleva adentro la clave pública (`pk_…`), así que alcanza con él. Las claves de un
+formato anterior no la traen: el SDK te la pide con un error claro y la pasás
+aparte, copiándola completa de la tabla de claves:
 `new BePago($secret, ['keyId' => 'pk_…'])`.
+
+Opciones: `'baseUrl' => 'https://bepago.com/api'` (con o sin `/v1` al final) y
+`'timeout' => 30` (segundos).
+
+### Errores
+
+Todo error lanza `Bepago\BePagoException` (extiende `RuntimeException`):
+`getStatus()` es el HTTP (0 si no hubo respuesta), `getErrorCode()` el código de
+bePago, `getRequestId()` y `getDetails()`. Sin respuesta de la API (red caída,
+tiempo agotado) el código es `network_error` o `timeout`: en pagos, reintentá
+con la **misma** clave de idempotencia.
+
+```php
+try {
+    $bp->payouts()->create($pago, 'pago-0001');
+} catch (\Bepago\BePagoException $e) {
+    error_log($e->getStatus() . ' ' . $e->getErrorCode() . ' ' . $e->getRequestId());
+}
+```
 
 ## Cobros
 
@@ -60,9 +81,15 @@ Consultar, reembolsar y ver saldo:
 
 ```php
 $bp->charges()->get('pedido-1842');
+$bp->charges()->list(['status' => 'paid', 'limit' => 50]);   // data, has_more, next_cursor
+$bp->charges()->cancel('pedido-1843');                       // uno todavía sin pagar
 $bp->charges()->refund('pedido-1842', 'cliente canceló');
 $bp->charges()->balance();
+$bp->sandbox()->pay('pedido-1844');                          // solo sk_test_: simula el pago
 ```
+
+La misma referencia devuelve siempre el mismo cobro, también vencido: si el
+cobro de una orden venció, creá otro con otra referencia (`pedido-1842-2`).
 
 ### 2. Embeber el checkout en tu página (iframe, `bepago.js`)
 
@@ -77,7 +104,8 @@ imagen. El iframe toma el alto de su contenido.
 
 ```html
 <div id="bepago-checkout"></div>
-<script src="https://bepago.com/sdk/bepago.js"></script>
+<script src="https://bepago.com/sdk/bepago-1.5.0.js"
+        integrity="sha384-rNIcmH1wI1RykstAPx0YrfMuW7+1WVXqzjTDqNYUgQlk65R8N9CRIauntZQJoHkI" crossorigin="anonymous"></script>
 <script>
   BePago.checkout({
     url: '<?= htmlspecialchars($cobro['checkout_url']) ?>',
@@ -95,15 +123,21 @@ imagen. El iframe toma el alto de su contenido.
 `onPaid` llega cuando el checkout avisa `{ type: 'bepago:paid', reference }`
 (postMessage, solo a los dominios que registraste en Integraciones › Dominio del
 checkout). Corre en el navegador del comprador y se puede falsificar: **nunca
-entregues desde ahí**. `onComplete` sigue existiendo (fin del checkout, en
-cualquier estado).
+entregues desde ahí**. `onComplete({ reference, status })` llega al terminar el
+checkout, en cualquier estado.
 
 ### 3. Recibir el webhook y entregar (en tu backend)
 
 El handler verifica firma y frescura (±5 min), descarta duplicados por
 `x-bepago-event-id`, responde 200 y **solo** invoca `onPaid` con eventos
-válidos. Antes de entregar, reconfirmá por API con `charges()->confirm()` y
-compará el monto contra tu orden.
+válidos; `onEvent` recibe todos los eventos (`payout.completed`, `payout.failed`…).
+Antes de entregar, reconfirmá por API con `charges()->confirm()` (`paid` es true
+con `paid` o `settled`) y compará el monto contra tu orden.
+
+- Si tu función lanza, responde 500 y el evento **no** queda como visto: el
+  reintento de bePago lo vuelve a procesar.
+- El aviso de prueba de «Probar mi webhook» llega con `"test": true`: el handler
+  responde 200 sin llamar a tus funciones.
 
 ```php
 use Psr\Http\Message\ServerRequestInterface as Req;
@@ -113,9 +147,9 @@ $wh = $bp->webhooks()->handler([
     'secret' => getenv('BEPAGO_WEBHOOK_SECRET'),
     'store'  => $misEventIds,   // has()/add() contra tu base: no entregar dos veces
     'onPaid' => function (array $c) use ($bp, $db) {
-        $order = $db->orders->find($c['reference']);
+        $order = $db->orders->findByChargeReference($c['reference']);
         $r = $bp->charges()->confirm($c['reference']);   // reconfirmamos por API
-        if ($r['paid'] && $order && $r['charge']['amount'] === $order->amount) entregar($order);
+        if ($r['paid'] && $order && (int) $r['charge']['amount'] === (int) $order->amount) entregar($order);
     },
 ]);
 
@@ -153,6 +187,7 @@ $payout = $bp->payouts()->create([
 ], 'idem-key-unica-por-pago');
 
 $bp->payouts()->get($payout['id']);
+$bp->payouts()->list(['status' => 'failed']);
 $bp->payouts()->cancel($payout['id']);
 $bp->payouts()->balance();
 ```

@@ -1,6 +1,6 @@
 {
     "name": "bepago/sdk",
-    "description": "SDK oficial de bePago para PHP (7.4+, sin dependencias)",
+    "description": "SDK oficial de bePago para PHP (7.4+, extensiones curl y json)",
     "type": "library",
     "license": "MIT",
     "homepage": "https://bepago.com/docs",
