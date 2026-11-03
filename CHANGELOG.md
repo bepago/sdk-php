@@ -1,5 +1,9 @@
 # Cambios — bePago SDK para PHP
 
+## 1.6.4 — 2026-11-03
+
+- `payouts()->create()` y `payouts()->batches()->create()` sin clave de idempotencia (o con menos de 8 caracteres) lanzan `BePagoException` (`getErrorCode()` `missing_idempotency_key`, `getStatus()` 0), como los demás errores. Antes era un `InvalidArgumentException` (y sin el argumento, un `ArgumentCountError`).
+
 ## 1.6.3 — 2026-11-03
 
 - `sandbox()->fund()` acepta también el cuerpo de la API: `fund(['amount' => 5000000])` (además de `fund(5000000)` y `fund()`).

@@ -125,14 +125,17 @@ imagen. El iframe toma el alto de su contenido.
 <script src="https://bepago.com/sdk/bepago-1.5.0.js"
         integrity="sha384-rNIcmH1wI1RykstAPx0YrfMuW7+1WVXqzjTDqNYUgQlk65R8N9CRIauntZQJoHkI" crossorigin="anonymous"></script>
 <script>
+  const orderId = <?= json_encode($order->id) ?>;   // el id de TU orden
   BePago.checkout({
     url: '<?= htmlspecialchars($cobro['checkout_url']) ?>',
     mount: '#bepago-checkout',
     theme: 'light',             // 'dark' si tu página tiene fondo oscuro
     showAmount: true,           // false si ya mostrás el monto en tu página
-    onPaid: ({ reference }) => {
+    onPaid: () => {
       // SOLO UI: mostrá "¡Gracias!" o redirigí. La confirmación es de tu backend.
-      location.href = '/gracias/' + reference;
+      // A gracias con el id de TU orden: la reference es la del intento
+      // (pedido-1842-2 en el segundo).
+      location.href = '/gracias/' + orderId;
     },
   });
 </script>
@@ -196,7 +199,9 @@ echo $out['body'];
 La **clave de idempotencia es obligatoria** en pagos y en lotes (mín. 8
 caracteres, única por pago o lote), igual que en la API: el SDK la exige antes
 de mandar el pedido. Repetir el mismo pedido con la misma clave devuelve el
-mismo pago, sin crear otro.
+mismo pago, sin crear otro. Sin clave, `BePagoException` con
+`getErrorCode()` `missing_idempotency_key` (`getStatus()` 0): lo atrapa el mismo
+`catch` que los errores de la API.
 
 ```php
 $payout = $bp->payouts()->create([
