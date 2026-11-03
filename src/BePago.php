@@ -363,7 +363,7 @@ class BePago {
      * `test` es true en el aviso de prueba de «Probar mi webhook» del panel
      * (charge.paid de un cobro que no existe): no entregues nada con él.
      *
-     * @return array{id:?string,event:?string,livemode:?bool,test:bool,data:?array}
+     * @return array{id:?string,event:?string,livemode:?bool,merchant_id:?string,test:bool,data:?array}
      */
     public static function verifyWebhook(string $webhookSecret, array $event, int $toleranceSeconds = 300): array {
         $timestamp = (string)($event['timestamp'] ?? '');
@@ -382,6 +382,7 @@ class BePago {
             'id' => $event['id'] ?? ($payload['id'] ?? null),
             'event' => $payload['event'] ?? null,
             'livemode' => $payload['livemode'] ?? null,
+            'merchant_id' => $payload['merchant_id'] ?? null,
             'test' => ($payload['test'] ?? false) === true,
             'data' => $payload['data'] ?? null,
         ];

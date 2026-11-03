@@ -1,5 +1,9 @@
 # Cambios — bePago SDK para PHP
 
+## 1.6.1 — 2026-11-03
+
+- El evento de `verifyWebhook` / `onEvent` trae `merchant_id` (tu ID de comercio), como el cuerpo real del aviso.
+
 ## 1.6.0 — 2026-11-03
 
 - **Reintentos automáticos** (`'maxRetries'`, 2 por defecto; `0` los apaga):
