@@ -177,18 +177,41 @@ class BePago {
         return $q === '' ? '' : '?' . $q;
     }
 
+    /**
+     * Modo de la clave: true (sk_live_), false (sk_test_) o null si no se sabe.
+     * El handler de webhooks lo compara con el `livemode` de cada aviso.
+     */
+    public static function livemodeOfSecret(string $secret): ?bool {
+        if (strpos($secret, 'sk_live_') === 0) return true;
+        if (strpos($secret, 'sk_test_') === 0) return false;
+        return null;
+    }
+
+    /**
+     * Un segmento de ruta (tu `reference` o un id), codificado igual que
+     * encodeURIComponent de JavaScript (y que los SDK de Node y Python): es lo
+     * que viaja y lo que se firma. `urlencode` no sirve (un espacio sería `+`).
+     * Vacío, `.` o `..` no son un segmento: cURL los resolvería como ruta.
+     */
+    public static function segment(string $value): string {
+        if ($value === '' || $value === '.' || $value === '..') {
+            throw new BePagoException('bePago: referencia o id inválido para la ruta (' . json_encode($value) . ')', 0, 'invalid_reference');
+        }
+        return strtr(rawurlencode($value), ['%21' => '!', '%2A' => '*', '%27' => "'", '%28' => '(', '%29' => ')']);
+    }
+
     public function charges(): object {
         $self = $this;
         return new class($self) {
             private $sdk;
             public function __construct($sdk) { $this->sdk = $sdk; }
             public function create(array $params): array { return $this->sdk->request('POST', '/v1/charges', $params); }
-            public function get(string $ref): array { return $this->sdk->request('GET', '/v1/charges/' . urlencode($ref)); }
+            public function get(string $ref): array { return $this->sdk->request('GET', '/v1/charges/' . BePago::segment($ref)); }
             /** Cobros del más nuevo al más viejo: data, has_more, next_cursor. Filtros: limit, status, from, to, cursor. */
             public function list(array $params = []): array { return $this->sdk->request('GET', '/v1/charges' . BePago::query($params)); }
             /** Cancela un cobro todavía sin pagar (created/pending). */
-            public function cancel(string $ref): array { return $this->sdk->request('POST', '/v1/charges/' . urlencode($ref) . '/cancel'); }
-            public function refund(string $ref, string $reason): array { return $this->sdk->request('POST', '/v1/charges/' . urlencode($ref) . '/refund', ['reason' => $reason]); }
+            public function cancel(string $ref): array { return $this->sdk->request('POST', '/v1/charges/' . BePago::segment($ref) . '/cancel'); }
+            public function refund(string $ref, string $reason): array { return $this->sdk->request('POST', '/v1/charges/' . BePago::segment($ref) . '/refund', ['reason' => $reason]); }
             public function balance(): array { return $this->sdk->request('GET', '/v1/charges/balance'); }
             /**
              * Confirma el estado REAL de un cobro consultando la API (fuente de
@@ -197,7 +220,7 @@ class BePago {
              * @return array{paid:bool,status:?string,charge:array}
              */
             public function confirm(string $ref): array {
-                $charge = $this->sdk->request('GET', '/v1/charges/' . urlencode($ref));
+                $charge = $this->sdk->request('GET', '/v1/charges/' . BePago::segment($ref));
                 $status = $charge['status'] ?? ($charge['data']['status'] ?? null);
                 return ['paid' => $status === 'paid' || $status === 'settled', 'status' => $status, 'charge' => $charge];
             }
@@ -210,10 +233,10 @@ class BePago {
             private $sdk;
             public function __construct($sdk) { $this->sdk = $sdk; }
             public function create(array $params, ?string $idempotencyKey = null): array { return $this->sdk->request('POST', '/v1/payouts', $params, BePago::requireIdempotencyKey($idempotencyKey)); }
-            public function get(string $id): array { return $this->sdk->request('GET', '/v1/payouts/' . urlencode($id)); }
+            public function get(string $id): array { return $this->sdk->request('GET', '/v1/payouts/' . BePago::segment($id)); }
             /** Pagos del más nuevo al más viejo: data, has_more, next_cursor. Filtros: limit, status, from, to, cursor. */
             public function list(array $params = []): array { return $this->sdk->request('GET', '/v1/payouts' . BePago::query($params)); }
-            public function cancel(string $id): array { return $this->sdk->request('POST', '/v1/payouts/' . urlencode($id) . '/cancel'); }
+            public function cancel(string $id): array { return $this->sdk->request('POST', '/v1/payouts/' . BePago::segment($id) . '/cancel'); }
             public function balance(): array { return $this->sdk->request('GET', '/v1/balance'); }
             /** Lotes de pagos masivos (hasta 1000 por llamada; quedan pendientes de aprobación en el panel). */
             public function batches(): object {
@@ -222,7 +245,7 @@ class BePago {
                     private $sdk;
                     public function __construct($sdk) { $this->sdk = $sdk; }
                     public function create(array $params, ?string $idempotencyKey = null): array { return $this->sdk->request('POST', '/v1/payouts/batches', $params, BePago::requireIdempotencyKey($idempotencyKey)); }
-                    public function get(string $id): array { return $this->sdk->request('GET', '/v1/payouts/batches/' . urlencode($id)); }
+                    public function get(string $id): array { return $this->sdk->request('GET', '/v1/payouts/batches/' . BePago::segment($id)); }
                 };
             }
         };
@@ -234,7 +257,7 @@ class BePago {
         return new class($self) {
             private $sdk;
             public function __construct($sdk) { $this->sdk = $sdk; }
-            public function pay(string $ref): array { return $this->sdk->request('POST', '/v1/test/charges/' . urlencode($ref) . '/pay'); }
+            public function pay(string $ref): array { return $this->sdk->request('POST', '/v1/test/charges/' . BePago::segment($ref) . '/pay'); }
             /**
              * Carga saldo de prueba para pagos masivos (sin monto: la carga estándar).
              * Acepta el monto solo (`fund(5000000)`) o el mismo cuerpo de la API (`fund(['amount' => 5000000])`).
@@ -256,7 +279,9 @@ class BePago {
      * Si `onPaid`/`onEvent` lanzan, responde 500 y el evento NO queda como
      * visto: el reintento de bePago lo vuelve a procesar (que tu entrega sea
      * idempotente por orden). El aviso de prueba del panel («Probar mi
-     * webhook», `test` true) responde 200 sin llamar a tus funciones.
+     * webhook», `test` true) responde 200 sin llamar a tus funciones. Un aviso
+     * del otro modo (`livemode` distinto del de tu clave: de prueba con
+     * sk_live_, o real con sk_test_) también: 200 y se ignora.
      *
      * Config: [
      *   'secret'  => string,                        // requerido
@@ -295,14 +320,18 @@ class BePago {
      * @return object con process(array $headers, string $rawBody): array
      */
     public function webhooks(): object {
-        return new class {
+        return new class(self::livemodeOfSecret($this->secret)) {
+            private ?bool $keyLivemode;
+            public function __construct(?bool $keyLivemode) { $this->keyLivemode = $keyLivemode; }
             public function handler(array $config): object {
                 if (empty($config['secret'])) throw new \InvalidArgumentException('bePago webhooks.handler: falta `secret`');
-                return new class($config) {
+                return new class($config, $this->keyLivemode) {
                     private array $config;
                     private object $store;
-                    public function __construct(array $config) {
+                    private ?bool $keyLivemode;
+                    public function __construct(array $config, ?bool $keyLivemode) {
                         $this->config = $config;
+                        $this->keyLivemode = $keyLivemode;
                         $this->store = $config['store'] ?? new class {
                             private array $seen = [];
                             public function has(string $id): bool { return isset($this->seen[$id]); }
@@ -330,6 +359,11 @@ class BePago {
                         }
                         if (!empty($evt['test'])) {
                             return ['status' => 200, 'body' => json_encode(['received' => true, 'test' => true]), 'duplicate' => false, 'ok' => true, 'test' => true];
+                        }
+                        // Aviso del otro modo (de prueba a un cliente con sk_live_, o al revés): 200 y se ignora,
+                        // sin callbacks ni marcarlo como visto. Sin clave de modo conocido, como siempre.
+                        if ($this->keyLivemode !== null && is_bool($evt['livemode'] ?? null) && $evt['livemode'] !== $this->keyLivemode) {
+                            return ['status' => 200, 'body' => json_encode(['received' => true, 'ignored' => 'livemode_mismatch']), 'duplicate' => false, 'ok' => true, 'ignored' => true];
                         }
                         $id = (string)($evt['id'] ?? '');
                         if ($this->store->has($id)) {

@@ -1,5 +1,10 @@
 # Cambios — bePago SDK para PHP
 
+## 1.6.5 — 2026-11-03
+
+- La referencia (o el id) va en la ruta codificada como `encodeURIComponent` (`ord:123` → `/v1/charges/ord%3A123`), igual que los SDK de Node y Python. Antes se usaba `urlencode` y un espacio viajaba como `+`. Vacía, `.` o `..`: `BePagoException` con `getErrorCode()` `invalid_reference` (`getStatus()` 0), sin request.
+- `webhooks()->handler()`: un aviso del otro modo (`livemode` distinto del de tu clave: de prueba con `sk_live_`, o real con `sk_test_`) responde 200 y se ignora (`'ignored' => true`): no llama a `onPaid` ni a `onEvent` y no lo marca como visto. Con una clave de la que no se sabe el modo, como antes.
+
 ## 1.6.4 — 2026-11-03
 
 - `payouts()->create()` y `payouts()->batches()->create()` sin clave de idempotencia (o con menos de 8 caracteres) lanzan `BePagoException` (`getErrorCode()` `missing_idempotency_key`, `getStatus()` 0), como los demás errores. Antes era un `InvalidArgumentException` (y sin el argumento, un `ArgumentCountError`).
